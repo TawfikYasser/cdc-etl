@@ -1,0 +1,8 @@
+{
+    "topic.prefix": "cdc",
+    "database.hostname": "postgres",
+    "database.user": "postgres",
+    "database.password": "********",
+    "database.dbname": "financial_db",
+    "plugin.name": "pgoutput"
+  }
