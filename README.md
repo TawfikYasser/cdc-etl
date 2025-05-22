@@ -1,130 +1,169 @@
 # cdc-etl
-ETL for CDC using Debezium, Kafka, Postgres, Docker
 
-# Project Steps & Commands
+A Change Data Capture (CDC) pipeline utilizing PostgreSQL, Debezium, Apache Kafka, and Docker to capture and process real-time data changes.
 
-* Running the docker compose using: docker compose up -d
-* pip install psycopg2-binary
-* pip install faker
-* Writing the main.py
-* Running the python scrpit using python3 main.py
-* Adding the pgadmin to the docker-compose.yml
-* Running the pgadmin using localhost:5050
-* Create a connector using the debezium through localhost:8080
-* Control Center: http://localhost:9021/clusters/MS0IWSTnSOu8gAvUNue1NQ/overview
-* Going to topics, check the messages to see the log.
-* Now we need to fix the amount and then look back at the log.
-* update transactions set amount = amount + 100 where transaction_id = 'a485b65e-6cbf-4649-8f42-54b9be6cc218';
-* The problem still exists, we need to fix it. (ALTER TABLE transactions REPLICA IDENTITY FULL;) Any actions made to the db will be replicated as before and after. (Now we have before and after in the payload but amount is still not fixed)
-* We need to change the connector value to fix the amount decimal conversion in debezium.
-Using an API call to the debezium: (Run the following command in the debezium container)
-curl -X PUT -H 'Content-Type: application/json' localhost:8083/connectors/pgsql_cdc_connector/config \
---data '
-{
-  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-  "topic.prefix": "cdc",
-  "database.user": "postgres",
-  "database.dbname": "financial_db",
-  "database.hostname": "postgres",
-  "database.password": "postgres",
-  "plugin.name": "pgoutput",
-  "decimal.handling.mode":"string"
-}
-'
+---
 
+## 📖 TABLE OF CONTENTS
 
-I got: 
+- [ABOUT](#about)
+- [ARCHITECTURE](#architecture)
+- [FEATURES](#features)
+- [PREREQUISITES](#prerequisites)
+- [INSTALLATION](#installation)
+- [USAGE](#usage)
+- [PROJECT STRUCTURE](#project-structure)
+- [TECHNOLOGIES USED](#technologies-used)
+- [CONTRIBUTING](#contributing)
+- [LICENSE](#license)
+- [CONTACT](#contact)
 
-{"name":"pgsql_cdc_connector","config":{"connector.class":"io.debezium.connector.postgresql.PostgresConnector","topic.prefix":"cdc","database.user":"postgres","database.dbname":"financial_db","database.hostname":"postgres","database.password":"postgres","plugin.name":"pgoutput","decimal.handling.mode":"string","name":"pgsql_cdc_connector"},"tasks":[{"connector":"pgsql_cdc_connector","task":0}],"type":"source"}
+---
 
+## 📌 ABOUT
 
-OK
+This project demonstrates a CDC pipeline that:
 
-* Now inserting, updating, etc is triggered at debezium.
-* Now we need to add the ability to track who and when the change has been made.
-* Adding two columns for modified_by and modified_with.
-* Create a function:
-CREATE OR REPLACE FUNCTION record_change_user()
-RETURNS TRIGGER AS $$
-BEGIN
-NEW.modified_by := current_user;
-NEW.modified_at := CURRENT_TIMESTAMP;
-RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-* Now we need to assign that function to transactions table.
+1. **Captures** changes from a PostgreSQL database using Debezium.
+2. **Streams** the changes through Apache Kafka.
+3. **Processes** the data for downstream applications.
 
-CREATE TRIGGER trigger_record_user_update
-BEFORE UPDATE ON transactions
-FOR EACH ROW EXECUTE FUNCTION record_change_user();
+---
 
-* Now we need to track what columns are changed, and what is the old and new values.
-* We will drop the previous trigger (DROP TRIGGER trigger_record_user_update on transactions;)
-* We will create a function to track the changed columns and old and new values.
+## 🏗️ ARCHITECTURE
 
-CREATE OR REPLACE FUNCTION record_changed_columns()
-RETURNS TRIGGER AS $$
-DECLARE
-change_details JSONB;
-BEGIN
-change_details := '{}'::JSONB; -- empty json object
-if NEW.amount IS DISTINCT FROM OLD.amount THEN
-change_details := jsonb_set(change_details, '{amount}', json_build_object('old', OLD.amount, 'new', NEW.amount), true);
-END IF;
--- adding the user and timestmap
-change_details := change_details || jsonb_build_object('modified_by', current_user, 'modified_at', now());
--- update the change_info column
--- update both user and timestamp columns invidually as well
-NEW.modified_by := current_user;
-NEW.modified_at := CURRENT_TIMESTAMP;
-NEW.change_info := change_details;
-RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+The pipeline follows this flow:
 
-CREATE OR REPLACE FUNCTION record_changed_columns()
-RETURNS TRIGGER AS $$
-DECLARE
-    change_details JSONB;
-BEGIN
-    change_details := '{}'::JSONB; -- empty json object
-    
-    -- Check if the amount has changed
-    IF NEW.amount IS DISTINCT FROM OLD.amount THEN
-        -- Add the old and new amount to the change_details JSONB
-        change_details := change_details || jsonb_build_object(
-            'amount', jsonb_build_object(
-                'old', OLD.amount,
-                'new', NEW.amount
-            )
-        );
-    END IF;
+1. **Data Source**:
+   - PostgreSQL database with logical replication enabled.
 
-    -- Add the user and timestamp to change_details
-    change_details := change_details || jsonb_build_object(
-        'modified_by', current_user,
-        'modified_at', now()
-    );
+2. **Change Data Capture**:
+   - Debezium captures changes from PostgreSQL and publishes them to Kafka topics.
 
-    -- Update the new row with modified_by, modified_at, and change_info
-    NEW.modified_by := current_user;
-    NEW.modified_at := CURRENT_TIMESTAMP;
-    NEW.change_info := change_details;
+3. **Data Streaming**:
+   - Apache Kafka acts as the message broker, facilitating real-time data streaming.
 
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+---
 
+## ✨ FEATURES
 
+- Real-time data capture from PostgreSQL.
+- Stream processing with Apache Kafka.
+- Dockerized setup for easy deployment.
 
-* Associate the function with the table transcations
+---
 
-ALTER TABLE transactions ADD COLUMN change_info JSONB;
+## ✅ PREREQUISITES
 
-DROP TRIGGER IF EXISTS trigger_record_change_information ON transactions;
+Before you begin, ensure you have met the following requirements:
 
-CREATE TRIGGER trigger_record_change_information
-BEFORE UPDATE ON transactions
-FOR EACH ROW EXECUTE FUNCTION record_changed_columns();
+- Docker and Docker Compose installed on your machine.
+- Python 3.7 or higher installed.
 
-update transactions set amount = amount + 1000 where transaction_id = '30df12d8-f2ae-42c3-8e30-44d4befdc4e1';
+---
+
+## 🚀 INSTALLATION
+
+1. **Clone the repository**:
+
+   ```bash
+   git clone https://github.com/TawfikYasser/cdc-etl.git
+   cd cdc-etl
+   ```
+
+2. **Start the Docker containers**:
+
+   ```bash
+   docker-compose up -d
+   ```
+
+   This will set up PostgreSQL, Kafka, and other necessary services.
+
+3. **Install Python dependencies**:
+
+   ```bash
+   pip install psycopg2-binary faker
+   ```
+
+---
+
+## 🛠️ USAGE
+
+1. **Run the data generator**:
+
+   ```bash
+   python3 main.py
+   ```
+
+   This script will generate synthetic data and insert it into the PostgreSQL database.
+
+2. **Access pgAdmin**:
+
+   - Navigate to `http://localhost:5050` in your browser to access pgAdmin.
+
+3. **Create Debezium Connector**:
+
+   - Use the Debezium UI at `http://localhost:8080` to create a connector for capturing changes from PostgreSQL.
+
+4. **Monitor Kafka Topics**:
+
+   - Access the Kafka Control Center at `http://localhost:9021` to monitor topics and messages.
+
+5. **Update Data**:
+
+   - Execute SQL commands to update data in PostgreSQL and observe the changes propagated through Kafka.
+
+   ```sql
+   UPDATE transactions SET amount = amount + 100 WHERE transaction_id = 'your_transaction_id';
+   ```
+
+---
+
+## 📁 PROJECT STRUCTURE
+
+```bash
+cdc-etl/
+├── docker-compose.yml        # Docker Compose configuration
+├── main.py                   # Python script to generate and insert data into PostgreSQL
+├── postgresql.sql            # SQL script to set up PostgreSQL schema
+├── README.md                 # Project documentation
+```
+
+---
+
+## 🧰 TECHNOLOGIES USED
+
+- **PostgreSQL**: Relational database for data storage.
+- **Debezium**: CDC platform for capturing changes from databases.
+- **Apache Kafka**: Distributed event streaming platform.
+- **Docker & Docker Compose**: Containerization and orchestration tools.
+- **Python**: Programming language for data generation script.
+
+---
+
+## 🤝 CONTRIBUTING
+
+Contributions are welcome! To contribute:
+
+1. **Fork** the repository.
+2. **Create** a new branch: `git checkout -b feature/your-feature-name`.
+3. **Commit** your changes: `git commit -m 'Add some feature'`.
+4. **Push** to the branch: `git push origin feature/your-feature-name`.
+5. **Submit** a pull request.
+
+Please ensure your code adheres to the project's coding standards and includes relevant tests.
+
+---
+
+## 📄 LICENSE
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## 📬 CONTACT
+
+**Tawfik Yasser**  
+GitHub: [@TawfikYasser](https://github.com/TawfikYasser)
+
+---
